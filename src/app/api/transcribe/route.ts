@@ -40,11 +40,26 @@ export async function POST(req: NextRequest): Promise<NextResponse<Transcription
     const transcript = await client.transcripts.transcribe({
       audio: cleanUrl,
       speech_models: ["universal-2"],
+      language_detection: true,
+      speaker_labels: true,
+      speakers_expected: 2,
     });
+
+    let transcription = "";
+    if (transcript.utterances && transcript.utterances.length > 0) {
+      transcription = transcript.utterances
+        .map((utterance) => `Speaker ${utterance.speaker}: ${utterance.text}`)
+        .join("\n\n");
+    } else {
+      transcription = transcript.text || "";
+    }
+
+
+    console.log(transcript)
 
     return NextResponse.json({
       url: cleanUrl,
-      transcription: transcript.text || "",
+      transcription: transcription,
     });
   } catch (error) {
     return NextResponse.json(
