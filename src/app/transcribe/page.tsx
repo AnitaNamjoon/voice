@@ -28,6 +28,7 @@ function TranscribeContent() {
     const searchParams = useSearchParams();
     const url = searchParams.get("url");
     const name = searchParams.get("name");
+    const fileId = searchParams.get("fileId");
 
     const [transcription, setTranscription] = useState<string>("");
     const [detectedLanguage, setDetectedLanguage] = useState<string>("");
@@ -49,14 +50,16 @@ function TranscribeContent() {
                 {
                     url,
                     language,
+                    fileId,
                 },
             );
 
             setTranscription(response.data.transcription);
             setDetectedLanguage(response.data.detectedLanguage ?? "");
         } catch (err) {
-            const message = axios.isAxiosError<ApiError>(err)
-                ? err.response?.data?.error || "Transcription failed"
+            const data = axios.isAxiosError<ApiError>(err) ? err.response?.data : null;
+            const message = data
+                ? `${data.error}${data.details ? `: ${data.details}` : ''}`
                 : "An unexpected error occurred";
             setError(message);
         } finally {

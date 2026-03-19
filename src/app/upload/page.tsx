@@ -3,15 +3,19 @@
 import { useState } from "react";
 import { UploadDropzone } from "@/utils/uploadthing";
 import { useRouter } from "next/navigation";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../../convex/_generated/api";
 
 interface UploadedFile {
   ufsUrl: string;
   name: string;
+  fileId?: string;
 }
 
 export default function UploadPage() {
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [error, setError] = useState<string>("");
+  const [isSaving, setIsSaving] = useState(false);
   const router = useRouter();
 
   const handleProceedToTranscription = () => {
@@ -20,6 +24,11 @@ export default function UploadPage() {
       url: uploadedFile.ufsUrl,
       name: uploadedFile.name,
     });
+    if (uploadedFile.fileId) {
+      params.append("fileId", uploadedFile.fileId);
+    }
+
+    sessionStorage.setItem("uploadedFile", JSON.stringify(uploadedFile));
     router.push(`/transcribe?${params.toString()}`);
   };
 
@@ -44,12 +53,33 @@ export default function UploadPage() {
             marginTop: "8px",
           },
         }}
-        onClientUploadComplete={(res) => {
+        onClientUploadComplete={async (res) => {
           if (res?.[0]) {
-            setUploadedFile({
-              ufsUrl: res[0].ufsUrl,
-              name: res[0].name,
-            });
+            const file = res[0];
+            setIsSaving(true);
+            try {
+              const convex = new ConvexHttpClient(
+                process.env.NEXT_PUBLIC_CONVEX_URL!
+              );
+              const fileId = await convex.mutation(api.files.saveFile, {
+                name: file.name,
+                url: file.ufsUrl, // use ufsUrl as the canonical URL
+                ufsUrl: file.ufsUrl,
+                size: file.size,
+                contentType: file.type ?? "audio/mpeg",
+              });
+              setUploadedFile({
+                ufsUrl: file.ufsUrl,
+                name: file.name,
+                fileId: fileId,
+              });
+            } catch (err) {
+              console.error("Failed to save file to Convex:", err);
+              // Still allow proceeding even if DB save fails
+              setUploadedFile({ ufsUrl: file.ufsUrl, name: file.name });
+            } finally {
+              setIsSaving(false);
+            }
             setError("");
           }
         }}

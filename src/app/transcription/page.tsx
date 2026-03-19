@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import axios from "axios";
+import { Id } from "../../../convex/_generated/dataModel";
 
 interface UploadedFile {
   ufsUrl: string;
   name: string;
+  fileId?: Id<"files">;
 }
 
 interface TranscriptionResponse {
@@ -26,7 +28,7 @@ const LANGUAGES = [
   { code: "sw", label: "Swahili" },
 ] as const;
 
-type LanguageCode = (typeof LANGUAGES)[number]["code"];
+type LanguageCode = typeof LANGUAGES[number]["code"];
 
 export default function TranscriptionPage() {
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
@@ -66,13 +68,11 @@ export default function TranscriptionPage() {
     setTranscription("");
 
     try {
-      const response = await axios.post<TranscriptionResponse>(
-        "/api/transcribe",
-        {
-          url: uploadedFile.ufsUrl,
-          language,
-        },
-      );
+      const response = await axios.post<TranscriptionResponse>("/api/transcribe", {
+        url: uploadedFile.ufsUrl,
+        language,
+        fileId: uploadedFile.fileId, // sent to server so route.ts can call Convex mutation
+      });
 
       const text = response.data.transcription;
       setTranscription(text);
@@ -80,11 +80,12 @@ export default function TranscriptionPage() {
         "transcription",
         JSON.stringify({
           text,
-          language:
-            LANGUAGES.find((l) => l.code === language)?.label ?? language,
+          language: LANGUAGES.find((l) => l.code === language)?.label ?? language,
           fileName: uploadedFile.name,
-        }),
+        })
       );
+
+      // Convex mutation is called server-side in route.ts
     } catch (err) {
       const message = axios.isAxiosError<ApiError>(err)
         ? err.response?.data?.error || "Transcription failed"
@@ -106,6 +107,7 @@ export default function TranscriptionPage() {
   return (
     <main className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-3xl mx-auto">
+
         {/* Back link */}
         <Link
           href="/upload"
@@ -120,9 +122,7 @@ export default function TranscriptionPage() {
             <p className="text-sm text-gray-600 mb-1">
               <span className="font-semibold">File:</span> {uploadedFile.name}
             </p>
-            <p className="text-xs text-gray-400 mb-4 break-all">
-              {uploadedFile.ufsUrl}
-            </p>
+            <p className="text-xs text-gray-400 mb-4 break-all">{uploadedFile.ufsUrl}</p>
 
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Transcription Language
@@ -152,9 +152,7 @@ export default function TranscriptionPage() {
           </div>
         ) : (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center mb-6">
-            <p className="text-gray-600 mb-4">
-              No file found. Please upload a file first.
-            </p>
+            <p className="text-gray-600 mb-4">No file found. Please upload a file first.</p>
             <Link
               href="/upload"
               className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
@@ -176,9 +174,7 @@ export default function TranscriptionPage() {
         {transcription && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
             <div className="mb-6 border-b border-gray-100 pb-4">
-              <h1 className="text-2xl font-bold text-gray-800">
-                Transcription
-              </h1>
+              <h1 className="text-2xl font-bold text-gray-800">Transcription</h1>
               <p className="text-xs text-gray-400 mt-1">
                 Detected: {LANGUAGES.find((l) => l.code === language)?.label}
                 {uploadedFile && <> &nbsp;·&nbsp; {uploadedFile.name}</>}
@@ -188,18 +184,12 @@ export default function TranscriptionPage() {
             <div className="space-y-5">
               {utterances.map((utterance, i) => {
                 const colonIdx = utterance.indexOf(":");
-                const label =
-                  colonIdx !== -1 ? utterance.slice(0, colonIdx + 1) : "";
-                const body =
-                  colonIdx !== -1
-                    ? utterance.slice(colonIdx + 1).trim()
-                    : utterance;
+                const label = colonIdx !== -1 ? utterance.slice(0, colonIdx + 1) : "";
+                const body = colonIdx !== -1 ? utterance.slice(colonIdx + 1).trim() : utterance;
                 return (
                   <p key={i} className="text-sm text-gray-700 leading-relaxed">
                     {label && (
-                      <span className="font-semibold text-gray-900">
-                        {label}{" "}
-                      </span>
+                      <span className="font-semibold text-gray-900">{label} </span>
                     )}
                     {body}
                   </p>

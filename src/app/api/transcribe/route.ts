@@ -9,121 +9,103 @@
 // url: file.ufsUrl,
 //};
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server"; // They come from Next.js, it handles HTTP requests and send responses
 import { AssemblyAI } from "assemblyai";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../../../convex/_generated/api";
+import { Id } from "../../../../convex/_generated/dataModel";
 
 interface TranscriptionResponse {
   url: string;
   transcription: string;
-  detectedLanguage?: string;
+
 }
 
-// Language codes used by AssemblyAI detection → MyMemory langpair source
-const LANG_LABEL: Record<string, string> = {
-  en: "English",
-  fr: "French",
-  de: "German",
-  sw: "Swahili",
-};
-
-/**
- * Translate a block of text to the target language using the MyMemory free API.
- * Returns the original text if translation fails or the language is already correct.
- */
-async function translateText(text: string, targetLang: string): Promise<string> {
-  if (!text.trim()) return text;
-
-  // MyMemory supports up to ~500 chars per request; chunk if needed
-  const MAX_CHARS = 450;
-
-  if (text.length <= MAX_CHARS) {
-    return callMyMemory(text, targetLang);
-  }
-
-  // Split on double-newline (speaker boundaries) to keep speaker labels intact
-  const segments = text.split("\n\n");
-  const translated: string[] = [];
-
-  for (const segment of segments) {
-    translated.push(await callMyMemory(segment, targetLang));
-  }
-
-  return translated.join("\n\n");
-}
-
-async function callMyMemory(text: string, targetLang: string): Promise<string> {
-  try {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetLang}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return text;
-    const data = await res.json();
-    const translated: string = data?.responseData?.translatedText ?? text;
-    // MyMemory returns the original text unchanged when it can't translate
-    return translated || text;
-  } catch {
-    return text; // graceful fallback
-  }
-}
-
-export async function POST(
-  req: NextRequest
-): Promise<NextResponse<TranscriptionResponse | { error: string; details?: string }>> {
-  try {
-    const { url, language } = await req.json();
+export async function POST(req: NextRequest): Promise<NextResponse<TranscriptionResponse | { error: string; }>> {
+  try { //error handling 
+    const { url, language, fileId } = await req.json();
 
     if (!url || typeof url !== "string") {
       return NextResponse.json({ error: "Valid audio URL is required" }, { status: 400 });
     }
 
     const apiKey = process.env.ASSEMBLYAI_API_KEY;
+
     if (!apiKey) {
       return NextResponse.json({ error: "AssemblyAI API key not configured" }, { status: 500 });
     }
 
     const cleanUrl = url.split("?")[0];
 
-    const client = new AssemblyAI({ apiKey });
-
-    // Always auto-detect the spoken language; translation happens after
-    const transcript = await client.transcripts.transcribe({
-      audio: cleanUrl,
-      speech_models: ["universal"],
-      language_detection: true,
-      speaker_labels: true,
-      speakers_expected: 2,
+    const client = new AssemblyAI({
+      apiKey: apiKey,
     });
 
-    // Build the raw transcription string (preserve speaker labels)
-    let rawTranscription = "";
+    // language_code and language_detection cannot exist together like at the same time so you must choose one of them 
+    const transcriptParams: Parameters<typeof client.transcripts.transcribe>[0] =
+      language && typeof language === "string" //Checking if a language was provided 
+        ? {
+          audio: cleanUrl,
+          speech_models: ["universal-2"],
+          language_code: language,
+          speaker_labels: true,
+          speakers_expected: 2,
+        }
+        : {
+          // No language: let AssemblyAI auto-detect
+          audio: cleanUrl,
+          speech_models: ["universal-2"],
+          language_detection: true,
+          speaker_labels: true,
+          speakers_expected: 2,
+        };
+
+    const transcript = await client.transcripts.transcribe(transcriptParams);
+
+    let transcription = "";
     if (transcript.utterances && transcript.utterances.length > 0) {
-      rawTranscription = transcript.utterances
-        .map((u) => `Speaker ${u.speaker}: ${u.text}`)
+      transcription = transcript.utterances
+        .map((utterance) => `Speaker ${utterance.speaker}: ${utterance.text}`)
         .join("\n\n");
     } else {
-      rawTranscription = transcript.text ?? "";
+      transcription = transcript.text || "";
     }
 
-    const detectedLanguage = transcript.language_code ?? "en";
 
-    // Translate only when the target differs from the detected/source language
-    let finalTranscription = rawTranscription;
-    const targetLang = language && typeof language === "string" ? language : "en";
+    // mutation from convex
+    if (!fileId) {
+      return NextResponse.json({
+        error: "Missing fileId. Please upload a new file.",
+      }, { status: 400 });
+    }
 
-    if (targetLang !== "en" && targetLang !== detectedLanguage) {
-      finalTranscription = await translateText(rawTranscription, targetLang);
+    try {
+      if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
+        throw new Error("NEXT_PUBLIC_CONVEX_URL is not set in environment");
+      }
+      const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL);
+      await convex.mutation(api.files.updateTranscription, {
+        fileId: fileId as Id<"files">,
+        transcription: transcription,
+      });
+    } catch (err: any) {
+      console.error("Mutation failed:", err);
+      return NextResponse.json({
+        error: "Failed to update transcription in database",
+        details: err.message || String(err),
+      }, { status: 500 });
     }
 
     return NextResponse.json({
       url: cleanUrl,
-      transcription: finalTranscription,
-      detectedLanguage: LANG_LABEL[detectedLanguage] ?? detectedLanguage,
+      transcription: transcription,
     });
   } catch (error) {
     console.error("[/api/transcribe] Error:", error);
     return NextResponse.json(
       {
         error: "Transcription request failed",
-        details: error instanceof Error ? error.message : String(error),
+        details: error instanceof Error ? error.message : String(error)
       },
       { status: 500 }
     );
